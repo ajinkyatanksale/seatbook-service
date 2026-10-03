@@ -1,0 +1,44 @@
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: seatbook
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/seatbook}
+    username: ${SPRING_DATASOURCE_USERNAME:seatbook}
+    password: ${SPRING_DATASOURCE_PASSWORD:seatbook}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      connection-timeout: 60000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  logging:
+    level:
+      org.flywaydb: DEBUG
+
+management:
+  endpoints:
+    web:
+      base-path: /
+      exposure:
+        include: prometheus
+      path-mapping:
+        prometheus: metrics
+  metrics:
+    tags:
+      application: seatbook
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+app:
+  admin-token: ${ADMIN_TOKEN:admin-token}
