@@ -2,7 +2,7 @@ package com.seatbook.auth;
 
 
 import com.seatbook.error.ErrorCode;
-import com.seatbook.dto.ErrorResponse;
+import com.seatbook.dto.responses.ErrorResponse;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

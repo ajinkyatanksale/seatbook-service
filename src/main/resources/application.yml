@@ -23,6 +23,9 @@ spring:
     level:
       org.flywaydb: DEBUG
 
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+
 management:
   endpoints:
     web:

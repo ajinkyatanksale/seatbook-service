@@ -1,6 +1,6 @@
 package com.seatbook.error;
 
-import com.seatbook.dto.ErrorResponse;
+import com.seatbook.dto.responses.ErrorResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
