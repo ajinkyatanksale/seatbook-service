@@ -8,6 +8,7 @@ import com.seatbook.model.Seat;
 import com.seatbook.model.Show;
 import com.seatbook.repository.SeatRepository;
 import com.seatbook.repository.ShowRepository;
+import com.seatbook.util.SeatLabels;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,7 +16,6 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static com.seatbook.error.ErrorCode.SHOW_NOT_FOUND;
-import static com.seatbook.error.ErrorCode.VALIDATION_ERROR;
 
 @Service
 public class ShowService {
@@ -32,14 +32,10 @@ public class ShowService {
     public ShowResponse createShow(CreateShowRequest createShowRequest) {
         UUID newShowId = UUID.randomUUID();
         int limit = createShowRequest.perUserLimit() != null ? createShowRequest.perUserLimit() : 4;
-        List<String> seatList = createShowRequest.seats();
-        Set<String> uniqueLabels = seatList.stream().map(String::trim).collect(Collectors.toSet());
-        if (uniqueLabels.size() != seatList.size()) {
-            throw new DomainException(VALIDATION_ERROR, "Duplicate seats found");
-        }
+        List<String> seatList = SeatLabels.getSortedLabels(createShowRequest.seats());
         Show show = new Show(newShowId, createShowRequest.name(), createShowRequest.pricePaise(), limit);
         showRepository.insert(show);
-        seatRepository.insertAll(newShowId, createShowRequest.seats());
+        seatRepository.insertAll(newShowId, seatList);
         return getShow(newShowId);
     }
 
