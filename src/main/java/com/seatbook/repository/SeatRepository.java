@@ -29,6 +29,11 @@ public class SeatRepository {
     private static final String FIND_EXISTING_LABELS =
             "SELECT label FROM seats WHERE show_id = :showId AND label IN (:labels)";
 
+    private static final String RELEASE = """
+        UPDATE seats SET status = 'available', reservation_id = NULL
+        WHERE reservation_id = :rid
+        """;
+
     private static final RowMapper<Seat> SEAT_MAPPER = (rs, rowNum) -> new Seat(
             rs.getObject("show_id", UUID.class),
             rs.getString("label"),
@@ -61,5 +66,9 @@ public class SeatRepository {
         return new HashSet<>(jdbc.query(FIND_EXISTING_LABELS,
                 new MapSqlParameterSource().addValue("showId", showId).addValue("labels", labels),
                 (rs, n) -> rs.getString("label")));
+    }
+
+    public int release(UUID reservationId) {
+        return jdbc.update(RELEASE, new MapSqlParameterSource("rid", reservationId));
     }
 }

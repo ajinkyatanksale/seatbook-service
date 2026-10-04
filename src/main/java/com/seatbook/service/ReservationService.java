@@ -98,4 +98,24 @@ public class ReservationService {
             throw new IllegalStateException(e);
         }
     }
+
+    @Transactional
+    public ReservationResponse cancel(String userId, UUID reservationId) {
+        Reservation reservation = reservationRepository.findById(reservationId)
+                .orElseThrow(() -> new DomainException(ErrorCode.RESERVATION_NOT_FOUND, "Reservation not found"));
+
+        if (!reservation.userId().equals(userId)) {
+            throw new DomainException(ErrorCode.FORBIDDEN, "You can only cancel your own reservations");
+        }
+
+        if (reservationRepository.markCancelled(reservationId) == 0) {
+            return toResponse(reservationRepository.findById(reservationId).orElseThrow());
+        }
+
+        int freed = seatRepository.release(reservationId);
+        quotaRepository.addSeats(reservation.showId(), userId, -freed);
+
+        return new ReservationResponse(reservation.id(), reservation.showId(), userId,
+                reservation.seats(), reservation.amountPaise(), "cancelled");
+    }
 }

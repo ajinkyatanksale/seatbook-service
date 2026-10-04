@@ -23,6 +23,10 @@ public class ReservationRepository {
             FROM reservations WHERE id = ?
             """;
 
+    private static final String UPDATE_BY_ID_AND_STATUS = """
+            UPDATE reservations set status = 'cancelled' WHERE id = ? and status = 'confirmed'
+            """;
+
     private static final RowMapper<Reservation> MAPPER = (rs, n) -> {
         String[] seats = (String[]) rs.getArray("seats").getArray();
         return new Reservation(
@@ -55,5 +59,9 @@ public class ReservationRepository {
 
     public Optional<Reservation> findById(UUID id) {
         return jdbc.query(FIND_BY_ID, MAPPER, id).stream().findFirst();
+    }
+
+    public int markCancelled(UUID id) {
+        return jdbc.update(UPDATE_BY_ID_AND_STATUS, id);
     }
 }

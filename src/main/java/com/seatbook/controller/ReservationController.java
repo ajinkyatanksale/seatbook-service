@@ -36,6 +36,13 @@ public class ReservationController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
+    @PostMapping("/reservations/{id}/cancel")
+    public ResponseEntity<ReservationResponse> cancel(
+            @RequestAttribute("authUser") AuthenticationUser user,
+            @PathVariable("id") UUID reservationId) {
+        return ResponseEntity.ok(reservationService.cancel(user.userId(), reservationId));
+    }
+
     private static String resolveKey(String header, String body) {
         String h = blankToNull(header);
         String b = blankToNull(body);
