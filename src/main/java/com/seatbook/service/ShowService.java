@@ -28,7 +28,7 @@ public class ShowService {
         this.seatRepository = seatRepository;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public ShowResponse createShow(CreateShowRequest createShowRequest) {
         UUID newShowId = UUID.randomUUID();
         int limit = createShowRequest.perUserLimit() != null ? createShowRequest.perUserLimit() : 4;
@@ -39,12 +39,13 @@ public class ShowService {
         return getShow(newShowId);
     }
 
+    @Transactional(readOnly = true)
     public ShowResponse getShow(UUID showId) {
         Show show = showRepository.findById(showId).orElseThrow(() -> new DomainException(SHOW_NOT_FOUND, "Show not found for provided show id"));
         List<Seat> seats = seatRepository.findByShowId(showId);
         Map<String, Long> countByStatus = seats.stream().collect(Collectors.groupingBy(Seat::status, Collectors.counting()));
         List<SeatView> seatViews = seats.stream().map(seat1 -> new SeatView(seat1.label(), seat1.status())).toList();
-        return new ShowResponse(showId, show.name(), show.pricePaise(), show.perUserLimit(), seats.size(), countByStatus.get("available").intValue(), countByStatus.get("held").intValue(), countByStatus.get("confirmed").intValue(), seatViews);
+        return new ShowResponse(showId, show.name(), show.pricePaise(), show.perUserLimit(), seats.size(), countByStatus.getOrDefault("available", 0L).intValue(), countByStatus.getOrDefault("held", 0L).intValue(), countByStatus.getOrDefault("confirmed", 0L).intValue(), seatViews);
 
     }
 }

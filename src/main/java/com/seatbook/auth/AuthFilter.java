@@ -35,7 +35,7 @@ public class AuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
 
         String authToken = request.getHeader("Authorization");
-        if (authToken == null || !authToken.regionMatches(true, 0, "BEARER", 0, "BEARER".length())) {
+        if (authToken == null || !authToken.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())) {
             createErrorResponse(response);
             return;
         }

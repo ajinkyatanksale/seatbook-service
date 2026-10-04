@@ -113,7 +113,7 @@ public class ReservationService {
         }
 
         int freed = seatRepository.release(reservationId);
-        quotaRepository.addSeats(reservation.showId(), userId, -freed);
+        quotaRepository.removeSeats(reservation.showId(), userId, freed);
 
         return new ReservationResponse(reservation.id(), reservation.showId(), userId,
                 reservation.seats(), reservation.amountPaise(), "cancelled");

@@ -1,12 +1,15 @@
 package com.seatbook.controller;
 
 import com.seatbook.auth.AuthenticationUser;
+import com.seatbook.auth.TokenAuthenticator;
 import com.seatbook.dto.requests.CreateShowRequest;
 import com.seatbook.dto.responses.ShowResponse;
 import com.seatbook.error.DomainException;
 import com.seatbook.error.ErrorCode;
 import com.seatbook.service.ShowService;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -22,7 +25,7 @@ public class ShowController {
 
     @PostMapping("/shows")
     public ResponseEntity<ShowResponse> createShow(@RequestAttribute("authUser") AuthenticationUser user, @Valid @RequestBody CreateShowRequest createShowRequest) {
-        if (user.isAdmin()) {
+        if (!user.isAdmin()) {
             throw new DomainException(ErrorCode.FORBIDDEN, "Admin only");
         }
         ShowResponse showResponse = showService.createShow(createShowRequest);

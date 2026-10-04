@@ -1,0 +1,567 @@
+### =====================================================================
+### seatbook - manual checkpoints (Phase 2)
+### IntelliJ HTTP Client file. Run requests top to bottom within a section.
+### Each section creates its own show and stores ids in global variables,
+### so later requests in the section use {{showA}}, {{r1}} etc. automatically.
+### =====================================================================
+
+@host = http://localhost:8080
+@admin = admin-token
+@alice = alice
+@bob = bob
+
+
+### ---------------------------------------------------------------------
+### 0. Health, metrics, auth basics
+### ---------------------------------------------------------------------
+
+### 0.1 liveness (no auth) -> 200
+GET {{host}}/healthz
+
+> {% client.test("200", function () { client.assert(response.status === 200); }); %}
+
+### 0.2 readiness (no auth) -> 200 when DB is up
+GET {{host}}/readyz
+
+> {% client.test("200", function () { client.assert(response.status === 200); }); %}
+
+### 0.3 metrics (no auth) -> 200
+GET {{host}}/metrics
+
+> {% client.test("200", function () { client.assert(response.status === 200); }); %}
+
+### 0.4 no Authorization header -> 401 unauthorized
+GET {{host}}/shows/00000000-0000-0000-0000-000000000000
+
+> {% client.test("401", function () { client.assert(response.status === 401); }); %}
+
+### 0.5 "Bearer" with no token -> 401 (must not be 500)
+GET {{host}}/shows/00000000-0000-0000-0000-000000000000
+Authorization: Bearer
+
+> {% client.test("401", function () { client.assert(response.status === 401); }); %}
+
+### 0.6 wrong HTTP method -> 405 method_not_allowed (not 500)
+DELETE {{host}}/shows
+Authorization: Bearer {{alice}}
+
+> {% client.test("405", function () { client.assert(response.status === 405); }); %}
+
+
+### ---------------------------------------------------------------------
+### 1. POST /shows  (Step 5 checkpoints)
+### ---------------------------------------------------------------------
+
+### 1.1 admin creates a 10-seat show -> 201, snake_case keys, available=10, total_seats=10
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{
+  "name": "friday-night",
+  "seats": ["A1","A2","A3","A4","A5","A6","A7","A8","A9","A10"],
+  "price_paise": 25000
+}
+
+> {%
+  client.test("201 + counts", function () {
+    client.assert(response.status === 201, "status " + response.status);
+    client.assert(response.body.total_seats === 10, "total_seats");
+    client.assert(response.body.available === 10, "available");
+  });
+  client.global.set("showBasic", response.body.id);
+%}
+
+### 1.2 same request with a normal user token -> 403 forbidden
+POST {{host}}/shows
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "name": "x", "seats": ["A1"], "price_paise": 100 }
+
+> {% client.test("403", function () { client.assert(response.status === 403); }); %}
+
+### 1.3 "user:<admin-token>" must NOT become admin -> 403
+POST {{host}}/shows
+Authorization: Bearer user:{{admin}}
+Content-Type: application/json
+
+{ "name": "x", "seats": ["A1"], "price_paise": 100 }
+
+> {% client.test("403", function () { client.assert(response.status === 403); }); %}
+
+### 1.4 missing price_paise -> 400 validation_error
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "x", "seats": ["A1"] }
+
+> {% client.test("400", function () { client.assert(response.status === 400); }); %}
+
+### 1.5 float money (250.9) -> must be 400. If this returns 201, fix Jackson config.
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "x", "seats": ["A1"], "price_paise": 250.9 }
+
+> {% client.test("400 for float money", function () { client.assert(response.status === 400, "got " + response.status); }); %}
+
+### 1.6 empty seats -> 400
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "x", "seats": [], "price_paise": 100 }
+
+> {% client.test("400", function () { client.assert(response.status === 400); }); %}
+
+### 1.7 duplicate seat labels -> 400 (not 500)
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "x", "seats": ["A1","A1"], "price_paise": 100 }
+
+> {% client.test("400", function () { client.assert(response.status === 400, "got " + response.status); }); %}
+
+### 1.8 malformed JSON -> 400 (not 500)
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "x", "seats": [
+
+> {% client.test("400", function () { client.assert(response.status === 400); }); %}
+
+### 1.9 spoofed user_id in body is ignored -> still 201
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "spoof-ok", "seats": ["A1"], "price_paise": 100, "user_id": "mallory" }
+
+> {% client.test("201", function () { client.assert(response.status === 201, "got " + response.status); }); %}
+
+
+### ---------------------------------------------------------------------
+### 2. GET /shows/{id}
+### ---------------------------------------------------------------------
+
+### 2.1 get the show from 1.1 -> 200, available + held + confirmed == total_seats
+GET {{host}}/shows/{{showBasic}}
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("invariant", function () {
+    var b = response.body;
+    client.assert(response.status === 200);
+    client.assert(b.available + b.held + b.confirmed === b.total_seats, "invariant broken");
+  });
+%}
+
+### 2.2 malformed uuid -> 400
+GET {{host}}/shows/not-a-uuid
+Authorization: Bearer {{alice}}
+
+> {% client.test("400", function () { client.assert(response.status === 400, "got " + response.status); }); %}
+
+### 2.3 unknown show -> 404 show_not_found
+GET {{host}}/shows/11111111-1111-1111-1111-111111111111
+Authorization: Bearer {{alice}}
+
+> {% client.test("404", function () { client.assert(response.status === 404); }); %}
+
+
+### ---------------------------------------------------------------------
+### 3. POST /shows/{id}/reserve  (Step 6 checkpoints)
+### Fresh show: 5 seats, limit 4, price 25000. Run 3.0 first, then in order.
+### ---------------------------------------------------------------------
+
+### 3.0 setup: create show A (5 seats, limit 4)
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{
+  "name": "reserve-checkpoint",
+  "seats": ["A1","A2","A3","A4","A5"],
+  "price_paise": 25000,
+  "per_user_limit": 4
+}
+
+> {%
+  client.test("201", function () { client.assert(response.status === 201); });
+  client.global.set("showA", response.body.id);
+%}
+
+### 3.1 alice reserves A1, key k1 -> 201, amount_paise = 25000
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A1"], "idempotency_key": "k1" }
+
+> {%
+  client.test("201 + amount", function () {
+    client.assert(response.status === 201, "status " + response.status);
+    client.assert(response.body.amount_paise === 25000, "amount");
+    client.assert(response.body.user_id === "alice", "user");
+    client.assert(response.body.status === "confirmed", "status field");
+  });
+  client.global.set("k1ReservationId", response.body.reservation_id);
+%}
+
+### 3.2 alice repeats the same request -> 201 with the SAME reservation_id
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A1"], "idempotency_key": "k1" }
+
+> {%
+  client.test("same reservation (idempotent replay)", function () {
+    client.assert(response.status === 201, "status " + response.status);
+    client.assert(response.body.reservation_id === client.global.get("k1ReservationId"), "different id");
+  });
+%}
+
+### 3.3 show state -> confirmed 1, available 4, sum 5
+GET {{host}}/shows/{{showA}}
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("counts", function () {
+    var b = response.body;
+    client.assert(b.confirmed === 1, "confirmed " + b.confirmed);
+    client.assert(b.available === 4, "available " + b.available);
+    client.assert(b.available + b.held + b.confirmed === b.total_seats, "invariant");
+  });
+%}
+
+### 3.4 bob reserves A1 (taken) -> 409 seat_taken
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{bob}}
+Content-Type: application/json
+
+{ "seats": ["A1"], "idempotency_key": "k2" }
+
+> {%
+  client.test("409 seat_taken", function () {
+    client.assert(response.status === 409);
+    client.assert(response.body.error === "seat_taken", "error " + response.body.error);
+  });
+%}
+
+### 3.5 alice reuses key k1 with different seats -> 409 idempotency_conflict
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A2"], "idempotency_key": "k1" }
+
+> {%
+  client.test("409 idempotency_conflict", function () {
+    client.assert(response.status === 409);
+    client.assert(response.body.error === "idempotency_conflict", "error " + response.body.error);
+  });
+%}
+
+### 3.6 all-or-nothing: alice asks [A2, A1]; A1 is hers already -> 409 seat_taken
+### ...and A2 must STILL be available afterwards (check 3.7)
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A2","A1"], "idempotency_key": "k3" }
+
+> {%
+  client.test("409 seat_taken", function () {
+    client.assert(response.status === 409);
+    client.assert(response.body.error === "seat_taken");
+  });
+%}
+
+### 3.7 A2 must still be available (rollback worked): confirmed still 1, available still 4
+GET {{host}}/shows/{{showA}}
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("rollback left no trace", function () {
+    var b = response.body;
+    client.assert(b.confirmed === 1, "confirmed " + b.confirmed);
+    client.assert(b.available === 4, "available " + b.available);
+  });
+%}
+
+### 3.8 per-user limit: alice has 1, asks for 4 more -> 409 per_user_limit
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A2","A3","A4","A5"], "idempotency_key": "k4" }
+
+> {%
+  client.test("409 per_user_limit", function () {
+    client.assert(response.status === 409);
+    client.assert(response.body.error === "per_user_limit", "error " + response.body.error);
+  });
+%}
+
+### 3.9 unknown seat -> 400 unknown_seat
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["Z9"], "idempotency_key": "k5" }
+
+> {%
+  client.test("400 unknown_seat", function () {
+    client.assert(response.status === 400);
+    client.assert(response.body.error === "unknown_seat", "error " + response.body.error);
+  });
+%}
+
+### 3.10 no idempotency key anywhere -> 400 validation_error
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A2"] }
+
+> {% client.test("400", function () { client.assert(response.status === 400); }); %}
+
+### 3.11 key via header instead of body -> 201
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Idempotency-Key: k6
+Content-Type: application/json
+
+{ "seats": ["A2"] }
+
+> {% client.test("201 via header key", function () { client.assert(response.status === 201, "got " + response.status); }); %}
+
+### 3.12 header and body keys differ -> 400
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Idempotency-Key: k7
+Content-Type: application/json
+
+{ "seats": ["A3"], "idempotency_key": "different" }
+
+> {% client.test("400", function () { client.assert(response.status === 400); }); %}
+
+### 3.13 spoofing: body says user_id=bob but token is alice -> reservation belongs to alice
+POST {{host}}/shows/{{showA}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A5"], "idempotency_key": "k8", "user_id": "bob" }
+
+> {%
+  client.test("identity from token only", function () {
+    client.assert(response.status === 201, "status " + response.status);
+    client.assert(response.body.user_id === "alice", "user_id was " + response.body.user_id);
+  });
+%}
+
+### 3.14 final state: counts still add up
+### In psql, `select count(*) from reservations where show_id = '<showA>'` should equal
+### the number of 201 reserves on this show (k1, k6, k8 = 3). Declines must leave no rows.
+GET {{host}}/shows/{{showA}}
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("invariant", function () {
+    var b = response.body;
+    client.assert(b.available + b.held + b.confirmed === b.total_seats, "invariant broken");
+    client.assert(b.confirmed === 3, "confirmed " + b.confirmed);
+  });
+%}
+
+
+### ---------------------------------------------------------------------
+### 4. POST /reservations/{id}/cancel  (Step 7 checkpoints)
+### Fresh show: 5 seats, limit 4. Run 4.0 first, then in order.
+### ---------------------------------------------------------------------
+
+### 4.0 setup: create show B
+POST {{host}}/shows
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{
+  "name": "cancel-checkpoint",
+  "seats": ["A1","A2","A3","A4","A5"],
+  "price_paise": 25000,
+  "per_user_limit": 4
+}
+
+> {%
+  client.test("201", function () { client.assert(response.status === 201); });
+  client.global.set("showB", response.body.id);
+%}
+
+### 4.1 alice reserves A1 + A2 (key c1) -> 201, saves R1
+POST {{host}}/shows/{{showB}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A1","A2"], "idempotency_key": "c1" }
+
+> {%
+  client.test("201", function () { client.assert(response.status === 201); });
+  client.global.set("r1", response.body.reservation_id);
+%}
+
+### 4.2 bob tries to cancel R1 -> 403 forbidden
+POST {{host}}/reservations/{{r1}}/cancel
+Authorization: Bearer {{bob}}
+
+> {%
+  client.test("403", function () {
+    client.assert(response.status === 403);
+    client.assert(response.body.error === "forbidden");
+  });
+%}
+
+### 4.3 nothing changed: confirmed 2
+GET {{host}}/shows/{{showB}}
+Authorization: Bearer {{alice}}
+
+> {% client.test("confirmed 2", function () { client.assert(response.body.confirmed === 2); }); %}
+
+### 4.4 alice cancels R1 -> 200, status cancelled
+POST {{host}}/reservations/{{r1}}/cancel
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("cancelled", function () {
+    client.assert(response.status === 200, "status " + response.status);
+    client.assert(response.body.status === "cancelled");
+  });
+%}
+
+### 4.5 seats back: available 5, confirmed 0, sum 5
+GET {{host}}/shows/{{showB}}
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("seats released", function () {
+    var b = response.body;
+    client.assert(b.available === 5, "available " + b.available);
+    client.assert(b.confirmed === 0, "confirmed " + b.confirmed);
+    client.assert(b.available + b.held + b.confirmed === b.total_seats);
+  });
+%}
+
+### 4.6 cancel again -> 200, no change. In psql the quota row must NOT go negative:
+###   select * from user_show_quota;
+POST {{host}}/reservations/{{r1}}/cancel
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("idempotent cancel", function () {
+    client.assert(response.status === 200);
+    client.assert(response.body.status === "cancelled");
+  });
+%}
+
+### 4.7 bob books the freed A1 (key c2) -> 201 (re-bookable)
+POST {{host}}/shows/{{showB}}/reserve
+Authorization: Bearer {{bob}}
+Content-Type: application/json
+
+{ "seats": ["A1"], "idempotency_key": "c2" }
+
+> {% client.test("201", function () { client.assert(response.status === 201, "got " + response.status); }); %}
+
+### 4.8 THE KEY TEST: alice cancels R1 a third time -> 200, and A1 must STAY confirmed to bob
+POST {{host}}/reservations/{{r1}}/cancel
+Authorization: Bearer {{alice}}
+
+> {% client.test("200", function () { client.assert(response.status === 200); }); %}
+
+### 4.8b verify: confirmed must be 1 (bob's A1), available 4
+GET {{host}}/shows/{{showB}}
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("never resurrected", function () {
+    var b = response.body;
+    client.assert(b.confirmed === 1, "confirmed " + b.confirmed + " (A1 must still be bob's)");
+    client.assert(b.available === 4, "available " + b.available);
+  });
+%}
+
+### 4.9 cancel unknown reservation -> 404 reservation_not_found
+POST {{host}}/reservations/22222222-2222-2222-2222-222222222222/cancel
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("404", function () {
+    client.assert(response.status === 404);
+    client.assert(response.body.error === "reservation_not_found");
+  });
+%}
+
+### 4.10 malformed reservation id -> 400
+POST {{host}}/reservations/not-a-uuid/cancel
+Authorization: Bearer {{alice}}
+
+> {% client.test("400", function () { client.assert(response.status === 400, "got " + response.status); }); %}
+
+### 4.11a quota returned: alice reserves 4 seats (A2..A5) -> 201 (A1 is bob's)
+POST {{host}}/shows/{{showB}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A2","A3","A4","A5"], "idempotency_key": "c3" }
+
+> {%
+  client.test("201", function () { client.assert(response.status === 201, "got " + response.status); });
+  client.global.set("r3", response.body.reservation_id);
+%}
+
+### 4.11b alice cancels that reservation -> 200
+POST {{host}}/reservations/{{r3}}/cancel
+Authorization: Bearer {{alice}}
+
+> {% client.test("200", function () { client.assert(response.status === 200); }); %}
+
+### 4.11c alice reserves the same 4 seats again with a NEW key -> 201 (quota was returned)
+POST {{host}}/shows/{{showB}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A2","A3","A4","A5"], "idempotency_key": "c4" }
+
+> {% client.test("201", function () { client.assert(response.status === 201, "got " + response.status); }); %}
+
+### 4.12 replay the ORIGINAL key c1 -> 201 returning R1 (status "cancelled"); it must NOT rebook
+POST {{host}}/shows/{{showB}}/reserve
+Authorization: Bearer {{alice}}
+Content-Type: application/json
+
+{ "seats": ["A1","A2"], "idempotency_key": "c1" }
+
+> {%
+  client.test("replay returns original", function () {
+    client.assert(response.status === 201, "status " + response.status);
+    client.assert(response.body.reservation_id === client.global.get("r1"), "different id");
+    client.assert(response.body.status === "cancelled", "status " + response.body.status);
+  });
+%}
+
+### 4.13 final invariant check
+GET {{host}}/shows/{{showB}}
+Authorization: Bearer {{alice}}
+
+> {%
+  client.test("invariant", function () {
+    var b = response.body;
+    client.assert(b.available + b.held + b.confirmed === b.total_seats, "invariant broken");
+    client.assert(b.confirmed === 5, "confirmed " + b.confirmed + " (bob A1 + alice A2..A5)");
+  });
+%}
