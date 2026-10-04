@@ -38,7 +38,7 @@ public class ReservationService {
     @Transactional
     public ReservationResponse reserve(String userId, UUID showId, List<String> rawSeats, String key) {
         List<String> seats = SeatLabels.getSortedLabels(rawSeats);
-
+        idempotencyRepository.lock(userId, key);
         Show show = showRepository.findById(showId)
                 .orElseThrow(() -> new DomainException(ErrorCode.SHOW_NOT_FOUND, "Show not found"));
 
@@ -75,7 +75,10 @@ public class ReservationService {
             throw new DomainException(ErrorCode.SEAT_TAKEN, "One or more requested seats are already taken");
         }
 
-        quotaRepository.addSeats(showId, userId, seats.size());
+        int count = quotaRepository.addSeats(showId, userId, seats.size());
+        if (count == 0) {
+            throw new DomainException(ErrorCode.PER_USER_LIMIT, "Per user limit exceeded");
+        }
         idempotencyRepository.insert(userId, key, hash, reservationId);
 
         return new ReservationResponse(reservationId, showId, userId, seats, amount, "confirmed");

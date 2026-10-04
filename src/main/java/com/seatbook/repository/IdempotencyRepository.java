@@ -19,6 +19,8 @@ public class IdempotencyRepository {
             INSERT INTO idempotency_keys (user_id, key, request_hash, reservation_id)
             VALUES (:userId, :key, :hash, :rid)
             """;
+    private static final String LOCK =
+            "SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))) t";
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -37,5 +39,11 @@ public class IdempotencyRepository {
         jdbc.update(INSERT, new MapSqlParameterSource()
                 .addValue("userId", userId).addValue("key", key)
                 .addValue("hash", hash).addValue("rid", reservationId));
+    }
+
+    public void lock(String userId, String key) {
+        jdbc.queryForObject(LOCK,
+                new MapSqlParameterSource("k", userId + ":" + key),
+                Integer.class);
     }
 }

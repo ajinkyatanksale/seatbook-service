@@ -9,14 +9,14 @@ import java.util.UUID;
 @Repository
 public class QuotaRepository {
 
-    private static final String GET =
-            "SELECT seat_count FROM user_show_quota WHERE show_id = :showId AND user_id = :userId";
+    private static final String GET = """
+            INSERT INTO user_show_quota (show_id, user_id, seat_count)
+            VALUES (:showId, :userId, 0) ON CONFLICT DO NOTHING"
+            """;
 
     private static final String ADD = """
-        INSERT INTO user_show_quota (show_id, user_id, seat_count)
-        VALUES (:showId, :userId, :delta)
-        ON CONFLICT (show_id, user_id)
-        DO UPDATE SET seat_count = user_show_quota.seat_count + :delta
+            UPDATE user_show_quota SET seat_count = seat_count + :n
+            WHERE show_id = :showId AND user_id = :userId AND seat_count + :n <= :limit
         """;
 
     private static final String REMOVE = """
@@ -37,8 +37,8 @@ public class QuotaRepository {
         return rows.isEmpty() ? 0 : rows.get(0);
     }
 
-    public void addSeats(UUID showId, String userId, int count) {
-        jdbc.update(ADD, params(showId, userId, count));
+    public int addSeats(UUID showId, String userId, int count) {
+        return jdbc.update(ADD, params(showId, userId, count));
     }
 
     public void removeSeats(UUID showId, String userId, int count) {
