@@ -2,8 +2,12 @@ server:
   port: ${PORT:8080}
   shutdown: graceful
   tomcat:
-    max-connections: 30000     # default 8192 would refuse part of a 20k burst
-    accept-count: 10000
+    tomcat:
+      threads:
+        max: 20
+        min-spare: 5
+      accept-count: 200
+      connection-timeout: 20000
 
 spring:
   application:
@@ -17,10 +21,10 @@ spring:
     password: ${SPRING_DATASOURCE_PASSWORD:seatbook}
     hikari:
       maximum-pool-size: 5
-      minimum-idle: 2
+      minimum-idle: 5
       connection-timeout: 20000
-      idle-timeout: 300000
       max-lifetime: 900000
+      idle-timeout: 300000
 
   flyway:
     enabled: true
