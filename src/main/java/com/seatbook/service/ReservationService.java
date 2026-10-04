@@ -39,12 +39,10 @@ public class ReservationService {
     public ReservationResponse reserve(String userId, UUID showId, List<String> rawSeats, String key) {
         List<String> seats = SeatLabels.getSortedLabels(rawSeats);
 
-        // 1. serialize same-(user,key) requests; released at commit/rollback
-        idempotencyRepository.lock(userId, key);
+        idempotencyRepository.lock(userId, showId, key);
 
-        // 2. replay or conflict
         String hash = requestHash(showId, seats);
-        Optional<IdempotencyRepository.Entry> existing = idempotencyRepository.find(userId, key);
+        Optional<IdempotencyRepository.Entry> existing = idempotencyRepository.find(userId, key, showId);
         if (existing.isPresent()) {
             if (!existing.get().requestHash().equals(hash)) {
                 throw new DomainException(ErrorCode.IDEMPOTENCY_CONFLICT,
@@ -55,18 +53,15 @@ public class ReservationService {
             return toResponse(original);
         }
 
-        // 3. show (immutable, no lock needed)
         Show show = showRepository.findById(showId)
                 .orElseThrow(() -> new DomainException(ErrorCode.SHOW_NOT_FOUND, "Show not found"));
 
-        // 4. per-user limit: guarded increment, row lock held until commit
         quotaRepository.ensureRow(showId, userId);
         if (!quotaRepository.tryAdd(showId, userId, seats.size(), show.perUserLimit())) {
             throw new DomainException(ErrorCode.PER_USER_LIMIT,
                     "Limit of " + show.perUserLimit() + " seats per user exceeded");
         }
 
-        // 5. lock seats in sorted order, then decide from the latest committed state
         Map<String, String> locked = seatRepository.lockSeats(showId, seats);
         if (locked.size() < seats.size()) {
             List<String> missing = seats.stream().filter(s -> !locked.containsKey(s)).toList();
@@ -76,7 +71,6 @@ public class ReservationService {
             throw new DomainException(ErrorCode.SEAT_TAKEN, "One or more requested seats are already taken");
         }
 
-        // 6. only now write the reservation (FK requires it before seats point at it)
         long amount = Math.multiplyExact(show.pricePaise(), (long) seats.size());
         UUID reservationId = UUID.randomUUID();
         reservationRepository.insert(new Reservation(reservationId, showId, userId, seats, amount, "confirmed"));
@@ -88,7 +82,7 @@ public class ReservationService {
             throw new IllegalStateException("Claimed " + claimed + " of " + seats.size() + " locked seats");
         }
 
-        idempotencyRepository.insert(userId, key, hash, reservationId);
+        idempotencyRepository.insert(userId, key, hash, reservationId, showId);
         return new ReservationResponse(reservationId, showId, userId, seats, amount, "confirmed");
     }
 

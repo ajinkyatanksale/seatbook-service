@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 @Service
@@ -18,6 +19,9 @@ public class ReservationFacade {
 
     private final ReservationService service;
     private final Semaphore permits;
+
+    private final AtomicLong retries = new AtomicLong();
+    public long retryCount() { return retries.get(); }
 
     public ReservationFacade(ReservationService service,
                              @Value("${app.booking.max-concurrent:24}") int maxConcurrent) {
@@ -40,6 +44,7 @@ public class ReservationFacade {
                 try {
                     return work.get();
                 } catch (PessimisticLockingFailureException e) {   // deadlock / lock timeout / serialization
+                    retries.incrementAndGet();
                     if (attempt >= MAX_ATTEMPTS) throw e;
                     sleepQuietly(ThreadLocalRandom.current().nextLong(5, 25) * attempt);
                 }

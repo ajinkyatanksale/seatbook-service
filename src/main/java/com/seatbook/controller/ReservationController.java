@@ -6,7 +6,6 @@ import com.seatbook.dto.responses.ReservationResponse;
 import com.seatbook.error.DomainException;
 import com.seatbook.error.ErrorCode;
 import com.seatbook.service.ReservationFacade;
-import com.seatbook.service.ReservationService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
