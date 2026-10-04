@@ -1,6 +1,9 @@
 server:
   port: ${PORT:8080}
   shutdown: graceful
+  tomcat:
+    max-connections: 30000     # default 8192 would refuse part of a 20k burst
+    accept-count: 10000
 
 spring:
   application:
@@ -13,7 +16,7 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:seatbook}
     password: ${SPRING_DATASOURCE_PASSWORD:seatbook}
     hikari:
-      maximum-pool-size: ${DB_POOL_SIZE:20}
+      maximum-pool-size: 30    # must stay under the DB's max_connections (revisit in Phase 6)
       connection-timeout: 60000
   flyway:
     enabled: true
@@ -47,3 +50,5 @@ logging:
 
 app:
   admin-token: ${ADMIN_TOKEN:admin-token}
+  booking:
+    max-concurrent: 24

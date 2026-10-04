@@ -38,12 +38,12 @@ public class ReservationService {
     @Transactional
     public ReservationResponse reserve(String userId, UUID showId, List<String> rawSeats, String key) {
         List<String> seats = SeatLabels.getSortedLabels(rawSeats);
+
+        // 1. serialize same-(user,key) requests; released at commit/rollback
         idempotencyRepository.lock(userId, key);
-        Show show = showRepository.findById(showId)
-                .orElseThrow(() -> new DomainException(ErrorCode.SHOW_NOT_FOUND, "Show not found"));
 
+        // 2. replay or conflict
         String hash = requestHash(showId, seats);
-
         Optional<IdempotencyRepository.Entry> existing = idempotencyRepository.find(userId, key);
         if (existing.isPresent()) {
             if (!existing.get().requestHash().equals(hash)) {
@@ -55,32 +55,40 @@ public class ReservationService {
             return toResponse(original);
         }
 
-        int current = quotaRepository.getCount(showId, userId);
-        if (current + seats.size() > show.perUserLimit()) {
+        // 3. show (immutable, no lock needed)
+        Show show = showRepository.findById(showId)
+                .orElseThrow(() -> new DomainException(ErrorCode.SHOW_NOT_FOUND, "Show not found"));
+
+        // 4. per-user limit: guarded increment, row lock held until commit
+        quotaRepository.ensureRow(showId, userId);
+        if (!quotaRepository.tryAdd(showId, userId, seats.size(), show.perUserLimit())) {
             throw new DomainException(ErrorCode.PER_USER_LIMIT,
                     "Limit of " + show.perUserLimit() + " seats per user exceeded");
         }
 
+        // 5. lock seats in sorted order, then decide from the latest committed state
+        Map<String, String> locked = seatRepository.lockSeats(showId, seats);
+        if (locked.size() < seats.size()) {
+            List<String> missing = seats.stream().filter(s -> !locked.containsKey(s)).toList();
+            throw new DomainException(ErrorCode.UNKNOWN_SEAT, "Unknown seats: " + missing);
+        }
+        if (locked.values().stream().anyMatch(status -> !"available".equals(status))) {
+            throw new DomainException(ErrorCode.SEAT_TAKEN, "One or more requested seats are already taken");
+        }
+
+        // 6. only now write the reservation (FK requires it before seats point at it)
         long amount = Math.multiplyExact(show.pricePaise(), (long) seats.size());
         UUID reservationId = UUID.randomUUID();
         reservationRepository.insert(new Reservation(reservationId, showId, userId, seats, amount, "confirmed"));
 
+        // 7. guarded claim: still conditional on status='available' as a backstop
         int claimed = seatRepository.claim(showId, seats, reservationId);
         if (claimed != seats.size()) {
-            Set<String> found = seatRepository.findExistingLabels(showId, seats);
-            if (found.size() < seats.size()) {
-                List<String> missing = seats.stream().filter(s -> !found.contains(s)).toList();
-                throw new DomainException(ErrorCode.UNKNOWN_SEAT, "Unknown seats: " + missing);
-            }
-            throw new DomainException(ErrorCode.SEAT_TAKEN, "One or more requested seats are already taken");
+            // impossible while we hold the row locks; if it ever fires, the lock order is broken
+            throw new IllegalStateException("Claimed " + claimed + " of " + seats.size() + " locked seats");
         }
 
-        int count = quotaRepository.addSeats(showId, userId, seats.size());
-        if (count == 0) {
-            throw new DomainException(ErrorCode.PER_USER_LIMIT, "Per user limit exceeded");
-        }
         idempotencyRepository.insert(userId, key, hash, reservationId);
-
         return new ReservationResponse(reservationId, showId, userId, seats, amount, "confirmed");
     }
 
@@ -111,11 +119,15 @@ public class ReservationService {
             throw new DomainException(ErrorCode.FORBIDDEN, "You can only cancel your own reservations");
         }
 
+        // same global order as reserve: quota row first, then seats in label order
+        quotaRepository.lockRow(reservation.showId(), userId);
+
         if (reservationRepository.markCancelled(reservationId) == 0) {
             return toResponse(reservationRepository.findById(reservationId).orElseThrow());
         }
 
-        int freed = seatRepository.release(reservationId);
+        seatRepository.lockOwnedSeats(reservation.showId(), reservationId);
+        int freed = seatRepository.release(reservation.showId(), reservationId);
         quotaRepository.removeSeats(reservation.showId(), userId, freed);
 
         return new ReservationResponse(reservation.id(), reservation.showId(), userId,

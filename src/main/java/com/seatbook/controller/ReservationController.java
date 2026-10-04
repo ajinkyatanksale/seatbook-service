@@ -5,6 +5,7 @@ import com.seatbook.dto.requests.ReserveRequest;
 import com.seatbook.dto.responses.ReservationResponse;
 import com.seatbook.error.DomainException;
 import com.seatbook.error.ErrorCode;
+import com.seatbook.service.ReservationFacade;
 import com.seatbook.service.ReservationService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -18,9 +19,9 @@ public class ReservationController {
 
     private static final int MAX_KEY_LENGTH = 128;
 
-    private final ReservationService reservationService;
+    private final ReservationFacade reservationService;
 
-    public ReservationController(ReservationService reservationService) {
+    public ReservationController(ReservationFacade reservationService) {
         this.reservationService = reservationService;
     }
 

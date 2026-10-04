@@ -1,16 +1,14 @@
 package com.seatbook.repository;
 
 import com.seatbook.model.Seat;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import org.springframework.stereotype.Repository;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 @Repository
 public class SeatRepository {
@@ -26,12 +24,23 @@ public class SeatRepository {
         WHERE show_id = :showId AND label IN (:labels) AND status = 'available'
         """;
 
-    private static final String FIND_EXISTING_LABELS =
-            "SELECT label FROM seats WHERE show_id = :showId AND label IN (:labels)";
+    private static final String LOCK_SEATS = """
+        SELECT label, status FROM seats
+        WHERE show_id = :showId AND label IN (:labels)
+        ORDER BY label
+        FOR UPDATE
+        """;
+
+    private static final String LOCK_OWNED = """
+        SELECT label FROM seats
+        WHERE show_id = :showId AND reservation_id = :rid
+        ORDER BY label
+        FOR UPDATE
+        """;
 
     private static final String RELEASE = """
         UPDATE seats SET status = 'available', reservation_id = NULL
-        WHERE reservation_id = :rid
+        WHERE show_id = :showId AND reservation_id = :rid
         """;
 
     private static final RowMapper<Seat> SEAT_MAPPER = (rs, rowNum) -> new Seat(
@@ -62,13 +71,22 @@ public class SeatRepository {
         return jdbc.query(GET_SEATS_FOR_SHOW, new MapSqlParameterSource("show_id", showId), SEAT_MAPPER);
     }
 
-    public Set<String> findExistingLabels(UUID showId, List<String> labels) {
-        return new HashSet<>(jdbc.query(FIND_EXISTING_LABELS,
+    public Map<String, String> lockSeats(UUID showId, List<String> labels) {
+        Map<String, String> result = new LinkedHashMap<>();
+        jdbc.query(LOCK_SEATS,
                 new MapSqlParameterSource().addValue("showId", showId).addValue("labels", labels),
-                (rs, n) -> rs.getString("label")));
+                (RowCallbackHandler) rs -> result.put(rs.getString("label"), rs.getString("status")));
+        return result;
     }
 
-    public int release(UUID reservationId) {
-        return jdbc.update(RELEASE, new MapSqlParameterSource("rid", reservationId));
+    public void lockOwnedSeats(UUID showId, UUID reservationId) {
+        jdbc.query(LOCK_OWNED,
+                new MapSqlParameterSource().addValue("showId", showId).addValue("rid", reservationId),
+                rs -> { });
+    }
+
+    public int release(UUID showId, UUID reservationId) {
+        return jdbc.update(RELEASE,
+                new MapSqlParameterSource().addValue("showId", showId).addValue("rid", reservationId));
     }
 }
