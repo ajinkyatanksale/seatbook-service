@@ -130,7 +130,7 @@ async def main():
         "server_errors": []
     }
 
-    conn = aiohttp.TCPConnector(limit=CONCURRENCY, ttl_dns_cache=300)
+    conn = aiohttp.TCPConnector(limit=CONCURRENCY, ttl_dns_cache=300, keepalive_timeout=30)
     async with aiohttp.ClientSession(connector=conn) as session:
         print(f"[*] Target: {BASE_URL}")
         print(f"[*] Creating target show ({len(SEAT_LIST)} seats)...")
