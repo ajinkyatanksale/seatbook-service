@@ -32,7 +32,7 @@ public class ReservationController {
             @Valid @RequestBody ReserveRequest request) {
 
         String key = resolveKey(headerKey, request.idempotencyKey());
-        ReservationResponse response = reservationService.reserve(user.userId(), showId, request.seats(), key);
+        ReservationResponse response = reservationService.reserve(user.userId(), showId, request.seats(), key).response();
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -40,7 +40,7 @@ public class ReservationController {
     public ResponseEntity<ReservationResponse> cancel(
             @RequestAttribute("authUser") AuthenticationUser user,
             @PathVariable("id") UUID reservationId) {
-        return ResponseEntity.ok(reservationService.cancel(user.userId(), reservationId));
+        return ResponseEntity.ok(reservationService.cancel(user.userId(), reservationId).response());
     }
 
     private static String resolveKey(String header, String body) {

@@ -42,6 +42,9 @@ management:
   metrics:
     tags:
       application: seatbook
+    distribution:
+      percentiles-histogram:
+        "[http.server.requests]": true
 
 logging:
   structured:

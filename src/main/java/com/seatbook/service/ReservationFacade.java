@@ -1,6 +1,10 @@
 package com.seatbook.service;
 
-import com.seatbook.dto.responses.ReservationResponse;
+import com.seatbook.dto.responses.CancelResult;
+import com.seatbook.dto.responses.ReserveResult;
+import com.seatbook.error.DomainException;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -19,22 +23,38 @@ public class ReservationFacade {
 
     private final ReservationService service;
     private final Semaphore permits;
+    private final ReservationMetrics metrics;
 
     private final AtomicLong retries = new AtomicLong();
     public long retryCount() { return retries.get(); }
 
     public ReservationFacade(ReservationService service,
-                             @Value("${app.booking.max-concurrent:24}") int maxConcurrent) {
+                             @Value("${app.booking.max-concurrent:24}") int maxConcurrent,
+                             ReservationMetrics metrics,
+                             MeterRegistry registry) {
         this.service = service;
-        this.permits = new Semaphore(maxConcurrent, true);   // fair: FIFO for the 20k waiters
+        this.permits = new Semaphore(maxConcurrent, true);
+        this.metrics = metrics;
+        Gauge.builder("booking.permits.available", permits, Semaphore::availablePermits).register(registry);
+        Gauge.builder("booking.queue.length", permits, Semaphore::getQueueLength).register(registry);
     }
 
-    public ReservationResponse reserve(String userId, UUID showId, List<String> seats, String key) {
-        return guarded(() -> service.reserve(userId, showId, seats, key));
+    public ReserveResult reserve(String userId, UUID showId, List<String> seats, String key) {
+        try {
+            ReserveResult r = guarded(() -> service.reserve(userId, showId, seats, key));
+            if (r.replayed()) metrics.replay();
+            else metrics.confirmed(r.response().seats().size());
+            return r;
+        } catch (DomainException e) {
+            metrics.declined(e.getErrorCode().getValue());
+            throw e;
+        }
     }
 
-    public ReservationResponse cancel(String userId, UUID reservationId) {
-        return guarded(() -> service.cancel(userId, reservationId));
+    public CancelResult cancel(String userId, UUID reservationId) {
+        CancelResult r = guarded(() -> service.cancel(userId, reservationId));
+        if (r.seatsFreed() > 0) metrics.cancelled(r.seatsFreed());   // 0 means it was already cancelled
+        return r;
     }
 
     private <T> T guarded(Supplier<T> work) {
@@ -43,8 +63,9 @@ public class ReservationFacade {
             for (int attempt = 1; ; attempt++) {
                 try {
                     return work.get();
-                } catch (PessimisticLockingFailureException e) {   // deadlock / lock timeout / serialization
+                } catch (PessimisticLockingFailureException e) {
                     retries.incrementAndGet();
+                    metrics.retry();
                     if (attempt >= MAX_ATTEMPTS) throw e;
                     sleepQuietly(ThreadLocalRandom.current().nextLong(5, 25) * attempt);
                 }

@@ -7,6 +7,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -45,6 +46,7 @@ public class AuthFilter extends OncePerRequestFilter {
             createErrorResponse(response);
             return;
         }
+        MDC.put("user_id", authenticationUser.get().userId());
         request.setAttribute("authUser", authenticationUser.get());
 
         filterChain.doFilter(request, response);

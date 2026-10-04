@@ -1,6 +1,8 @@
 package com.seatbook.service;
 
+import com.seatbook.dto.responses.CancelResult;
 import com.seatbook.dto.responses.ReservationResponse;
+import com.seatbook.dto.responses.ReserveResult;
 import com.seatbook.error.DomainException;
 import com.seatbook.error.ErrorCode;
 import com.seatbook.model.Reservation;
@@ -36,7 +38,7 @@ public class ReservationService {
     }
 
     @Transactional
-    public ReservationResponse reserve(String userId, UUID showId, List<String> rawSeats, String key) {
+    public ReserveResult reserve(String userId, UUID showId, List<String> rawSeats, String key) {
         List<String> seats = SeatLabels.getSortedLabels(rawSeats);
 
         idempotencyRepository.lock(userId, showId, key);
@@ -50,7 +52,7 @@ public class ReservationService {
             }
             Reservation original = reservationRepository.findById(existing.get().reservationId())
                     .orElseThrow(() -> new IllegalStateException("Idempotency row without reservation"));
-            return toResponse(original);
+            return new ReserveResult(toResponse(original), true);
         }
 
         Show show = showRepository.findById(showId)
@@ -83,7 +85,7 @@ public class ReservationService {
         }
 
         idempotencyRepository.insert(userId, key, hash, reservationId, showId);
-        return new ReservationResponse(reservationId, showId, userId, seats, amount, "confirmed");
+        return new ReserveResult(new ReservationResponse(reservationId, showId, userId, seats, amount, "confirmed"), false);
     }
 
     private static ReservationResponse toResponse(Reservation r) {
@@ -105,7 +107,7 @@ public class ReservationService {
     }
 
     @Transactional
-    public ReservationResponse cancel(String userId, UUID reservationId) {
+    public CancelResult cancel(String userId, UUID reservationId) {
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new DomainException(ErrorCode.RESERVATION_NOT_FOUND, "Reservation not found"));
 
@@ -113,18 +115,17 @@ public class ReservationService {
             throw new DomainException(ErrorCode.FORBIDDEN, "You can only cancel your own reservations");
         }
 
-        // same global order as reserve: quota row first, then seats in label order
         quotaRepository.lockRow(reservation.showId(), userId);
 
         if (reservationRepository.markCancelled(reservationId) == 0) {
-            return toResponse(reservationRepository.findById(reservationId).orElseThrow());
+            return new CancelResult(toResponse(reservationRepository.findById(reservationId).orElseThrow()), 0);
         }
 
         seatRepository.lockOwnedSeats(reservation.showId(), reservationId);
         int freed = seatRepository.release(reservation.showId(), reservationId);
         quotaRepository.removeSeats(reservation.showId(), userId, freed);
 
-        return new ReservationResponse(reservation.id(), reservation.showId(), userId,
-                reservation.seats(), reservation.amountPaise(), "cancelled");
+        return new CancelResult(new ReservationResponse(reservation.id(), reservation.showId(), userId,
+                reservation.seats(), reservation.amountPaise(), "cancelled"), freed);
     }
 }
